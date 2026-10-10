@@ -8,12 +8,13 @@ import { useEffect, useState } from "react";
 import toast from "react-hot-toast";
 import { useProductStore } from "../_zustand/store";
 
-// Importação do Padrão Strategy
+// imports dos padrões
+import { orderSubject } from "@/lib/observer/orderObserver";
 import { OrderContext, RestApiOrderStrategy } from "@/lib/strategies/OrderStrategy";
 
 const CheckoutPage = () => {
   const { data: session } = useSession();
-  const [checkoutForm, setCheckoutForm] = useState({
+  const [checkoutForm, setCheckoutForm] = useState({   
     name: "",
     lastname: "",
     phone: "",
@@ -163,7 +164,7 @@ const CheckoutPage = () => {
 
       // AQUI IMPLEMENTEI O STRATEGY
       const orderContext = new OrderContext(new RestApiOrderStrategy());
-      await orderContext.executeOrderCreation({
+      const orderId = await orderContext.executeOrderCreation({
         orderData,
         products,
         addOrderProductFn: addOrderProduct,
@@ -185,12 +186,8 @@ const CheckoutPage = () => {
       });
       clearCart();
 
-      // eu vou adicionar o observer aqui...
-      try {
-        window.dispatchEvent(new CustomEvent("orderCompleted"));
-      } catch (error) {
-        console.log("Note: Could not trigger notification refresh");
-      }
+      // AQUI EU IMPLEMENTEI O OBSERVER
+      orderSubject.notifyAll(orderId);
 
       toast.success("Order created successfully! You will be contacted for payment.");
       setTimeout(() => {
