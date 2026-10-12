@@ -1,5 +1,4 @@
-const { PrismaClient } = require("@prisma/client");
-const prisma = new PrismaClient();
+const { orderRepository, userRepository } = require("../repositories");
 const { validateOrderData, ValidationError } = require('../utills/validation');
 const { createOrderUpdateNotification } = require('../utills/notificationHelpers');
 
@@ -42,16 +41,11 @@ async function createCustomerOrder(request, response) {
     }
 
     // Check for duplicate orders (same email and total within last 1 minute) - less strict
-    const oneMinuteAgo = new Date(Date.now() - 1 * 60 * 1000);
-    const duplicateOrder = await prisma.customer_order.findFirst({
-      where: {
-        email: validatedData.email,
-        total: validatedData.total,
-        dateTime: {
-          gte: oneMinuteAgo
-        }
-      }
-    });
+    const duplicateOrder = await orderRepository.findByEmailAndTotal(
+      validatedData.email,
+      validatedData.total,
+      1
+    );
 
     if (duplicateOrder) {
       console.log("❌ Duplicate order detected (same email, amount, within 1 minute)");
@@ -63,24 +57,7 @@ async function createCustomerOrder(request, response) {
 
     console.log("Creating order in database...");
     // Create the order with validated data
-    const corder = await prisma.customer_order.create({
-      data: {
-        name: validatedData.name,
-        lastname: validatedData.lastname,
-        phone: validatedData.phone,
-        email: validatedData.email,
-        company: validatedData.company,
-        adress: validatedData.adress,
-        apartment: validatedData.apartment,
-        postalCode: validatedData.postalCode,
-        status: validatedData.status,
-        city: validatedData.city,
-        country: validatedData.country,
-        orderNotice: validatedData.orderNotice,
-        total: validatedData.total,
-        dateTime: new Date()
-      },
-    });
+    const corder = await orderRepository.create(validatedData);
 
     console.log("✅ Order created successfully:", corder);
     console.log("Order ID:", corder.id);
@@ -92,9 +69,7 @@ async function createCustomerOrder(request, response) {
       // First, try to use userId if provided (from logged-in user)
       if (request.body.userId) {
         console.log(`🔍 Using provided userId: ${request.body.userId}`);
-        user = await prisma.user.findUnique({
-          where: { id: request.body.userId }
-        });
+        user = await userRepository.findById(request.body.userId);
         if (user) {
           console.log(`✅ Found user by ID: ${user.email}`);
         } else {
@@ -105,9 +80,7 @@ async function createCustomerOrder(request, response) {
       // Fallback: search by email if no userId or user not found
       if (!user) {
         console.log(`🔍 Searching user by email: ${validatedData.email}`);
-        user = await prisma.user.findUnique({
-          where: { email: validatedData.email }
-        });
+        user = await userRepository.findByEmail(validatedData.email);
         if (user) {
           console.log(`✅ Found user by email: ${user.email}`);
         }
@@ -200,11 +173,7 @@ async function updateCustomerOrder(request, response) {
 
     const validatedData = validation.validatedData;
 
-    const existingOrder = await prisma.customer_order.findUnique({
-      where: {
-        id: id,
-      },
-    });
+    const existingOrder = await orderRepository.findById(id);
 
     if (!existingOrder) {
       return response.status(404).json({ 
@@ -213,33 +182,12 @@ async function updateCustomerOrder(request, response) {
       });
     }
 
-    const updatedOrder = await prisma.customer_order.update({
-      where: {
-        id: existingOrder.id,
-      },
-      data: {
-        name: validatedData.name,
-        lastname: validatedData.lastname,
-        phone: validatedData.phone,
-        email: validatedData.email,
-        company: validatedData.company,
-        adress: validatedData.adress,
-        apartment: validatedData.apartment,
-        postalCode: validatedData.postalCode,
-        status: validatedData.status,
-        city: validatedData.city,
-        country: validatedData.country,
-        orderNotice: validatedData.orderNotice,
-        total: validatedData.total,
-      },
-    });
+    const updatedOrder = await orderRepository.update(existingOrder.id, validatedData);
 
     // Create notification for status update if status changed
     if (existingOrder.status !== validatedData.status) {
       try {
-        const user = await prisma.user.findUnique({
-          where: { email: validatedData.email }
-        });
+        const user = await userRepository.findByEmail(validatedData.email);
         
         if (user) {
           await createOrderUpdateNotification(
@@ -293,9 +241,7 @@ async function deleteCustomerOrder(request, response) {
       });
     }
 
-    const existingOrder = await prisma.customer_order.findUnique({
-      where: { id: id },
-    });
+    const existingOrder = await orderRepository.findById(id);
 
     if (!existingOrder) {
       return response.status(404).json({ 
@@ -304,11 +250,7 @@ async function deleteCustomerOrder(request, response) {
       });
     }
 
-    await prisma.customer_order.delete({
-      where: {
-        id: id,
-      },
-    });
+    await orderRepository.delete(id);
 
     console.log(`Order deleted successfully: ID ${id}`);
     return response.status(204).send();
@@ -340,11 +282,7 @@ async function getCustomerOrder(request, response) {
       });
     }
 
-    const order = await prisma.customer_order.findUnique({
-      where: {
-        id: id,
-      },
-    });
+    const order = await orderRepository.findById(id);
     
     if (!order) {
       return response.status(404).json({ 
@@ -368,7 +306,6 @@ async function getAllOrders(request, response) {
     // Add pagination and filtering for better performance
     const page = parseInt(request.query.page) || 1;
     const limit = parseInt(request.query.limit) || 50;
-    const offset = (page - 1) * limit;
     
     // Validate pagination parameters
     if (page < 1 || limit < 1 || limit > 100) {
@@ -378,26 +315,7 @@ async function getAllOrders(request, response) {
       });
     }
 
-    const [orders, totalCount] = await Promise.all([
-      prisma.customer_order.findMany({
-        skip: offset,
-        take: limit,
-        orderBy: {
-          dateTime: 'desc'
-        }
-      }),
-      prisma.customer_order.count()
-    ]);
-
-    return response.json({
-      orders,
-      pagination: {
-        page,
-        limit,
-        total: totalCount,
-        totalPages: Math.ceil(totalCount / limit)
-      }
-    });
+    return response.json(await orderRepository.findAll(page, limit));
   } catch (error) {
     console.error("Error fetching orders:", error);
     return response.status(500).json({ 
