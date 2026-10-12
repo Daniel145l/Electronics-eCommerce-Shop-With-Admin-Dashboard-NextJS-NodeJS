@@ -1,5 +1,4 @@
-const { PrismaClient } = require('@prisma/client');
-const prisma = new PrismaClient();
+const { notificationRepository, userRepository } = require('../repositories');
 
 /**
  * Get notifications for a user with filtering and pagination
@@ -45,16 +44,9 @@ const getUserNotifications = async (req, res) => {
 
     // Get notifications with pagination
     const [notifications, total, unreadCount] = await Promise.all([
-      prisma.notification.findMany({
-        where,
-        orderBy,
-        skip,
-        take,
-      }),
-      prisma.notification.count({ where }),
-      prisma.notification.count({
-        where: { userId, isRead: false }
-      })
+      notificationRepository.findMany({ where, orderBy, skip, take }),
+      notificationRepository.count(where),
+      notificationRepository.count({ userId, isRead: false })
     ]);
 
     const totalPages = Math.ceil(total / take);
@@ -99,23 +91,19 @@ const createNotification = async (req, res) => {
     }
 
     // Check if user exists
-    const user = await prisma.user.findUnique({
-      where: { id: userId }
-    });
+    const user = await userRepository.findById(userId);
 
     if (!user) {
       return res.status(404).json({ error: 'User not found' });
     }
 
-    const notification = await prisma.notification.create({
-      data: {
-        userId,
-        title,
-        message,
-        type,
-        priority,
-        metadata
-      }
+    const notification = await notificationRepository.create({
+      userId,
+      title,
+      message,
+      type,
+      priority,
+      metadata
     });
 
     res.status(201).json(notification);
@@ -137,10 +125,7 @@ const updateNotification = async (req, res) => {
       return res.status(400).json({ error: 'isRead must be a boolean value' });
     }
 
-    const notification = await prisma.notification.update({
-      where: { id },
-      data: { isRead }
-    });
+    const notification = await notificationRepository.update(id, { isRead });
 
     res.json(notification);
   } catch (error) {
@@ -167,13 +152,13 @@ const bulkMarkAsRead = async (req, res) => {
       return res.status(400).json({ error: 'userId is required' });
     }
 
-    const updateResult = await prisma.notification.updateMany({
-      where: {
+    const updateResult = await notificationRepository.updateMany(
+      {
         id: { in: notificationIds },
         userId: userId // Ensure user can only update their own notifications
       },
-      data: { isRead: true }
-    });
+      { isRead: true }
+    );
 
     res.json({ 
       message: `${updateResult.count} notifications marked as read`,
@@ -194,17 +179,13 @@ const deleteNotification = async (req, res) => {
     const { userId } = req.body;
 
     // Ensure user can only delete their own notifications
-    const notification = await prisma.notification.findFirst({
-      where: { id, userId }
-    });
+    const notification = await notificationRepository.findFirst({ id, userId });
 
     if (!notification) {
       return res.status(404).json({ error: 'Notification not found' });
     }
 
-    await prisma.notification.delete({
-      where: { id }
-    });
+    await notificationRepository.delete(id);
 
     res.json({ message: 'Notification deleted successfully' });
   } catch (error) {
@@ -228,11 +209,9 @@ const bulkDeleteNotifications = async (req, res) => {
       return res.status(400).json({ error: 'userId is required' });
     }
 
-    const deleteResult = await prisma.notification.deleteMany({
-      where: {
-        id: { in: notificationIds },
-        userId: userId // Ensure user can only delete their own notifications
-      }
+    const deleteResult = await notificationRepository.deleteMany({
+      id: { in: notificationIds },
+      userId: userId // Ensure user can only delete their own notifications
     });
 
     res.json({ 
@@ -252,9 +231,7 @@ const getUnreadCount = async (req, res) => {
   try {
     const { userId } = req.params;
 
-    const unreadCount = await prisma.notification.count({
-      where: { userId, isRead: false }
-    });
+    const unreadCount = await notificationRepository.count({ userId, isRead: false });
 
     res.json({ unreadCount });
   } catch (error) {

@@ -1,4 +1,4 @@
-const prisma = require("../utills/db"); // ✅ Use shared connection with SSL
+const { productRepository } = require("../repositories"); // ✅ Repository Pattern: sem Prisma direto
 const { asyncHandler, handleServerError, AppError } = require("../utills/errorHandler");
 
 // Security: Define whitelists for allowed filter types and operators
@@ -74,7 +74,7 @@ const getAllProducts = asyncHandler(async (request, response) => {
   
   // checking if we are on the admin products page because we don't want to have filtering, sorting and pagination there
   if(mode === "admin"){
-    const adminProducts = await prisma.product.findMany({});
+    const adminProducts = await productRepository.findMany({});
     return response.json(adminProducts);
   } else {
     const dividerLocation = request.url.indexOf("?");
@@ -190,31 +190,17 @@ const getAllProducts = asyncHandler(async (request, response) => {
     let products;
 
     if (Object.keys(filterObj).length === 0) {
-      products = await prisma.product.findMany({
+      products = await productRepository.findMany({
         skip: (validatedPage - 1) * 10,
         take: 12,
-        include: {
-          category: {
-            select: {
-              name: true,
-            },
-          },
-        },
         orderBy: sortObj,
       });
     } else {
       // Security: Handle category filter with proper validation
       if (filterObj.category && filterObj.category.equals) {
-        products = await prisma.product.findMany({
+        products = await productRepository.findMany({
           skip: (validatedPage - 1) * 10,
           take: 12,
-          include: {
-            category: {
-              select: {
-                name: true,
-              },
-            },
-          },
           where: {
             ...whereClause,
             category: {
@@ -226,16 +212,9 @@ const getAllProducts = asyncHandler(async (request, response) => {
           orderBy: sortObj,
         });
       } else {
-        products = await prisma.product.findMany({
+        products = await productRepository.findMany({
           skip: (validatedPage - 1) * 10,
           take: 12,
-          include: {
-            category: {
-              select: {
-                name: true,
-              },
-            },
-          },
           where: whereClause,
           orderBy: sortObj,
         });
@@ -247,15 +226,7 @@ const getAllProducts = asyncHandler(async (request, response) => {
 });
 
 const getAllProductsOld = asyncHandler(async (request, response) => {
-  const products = await prisma.product.findMany({
-    include: {
-      category: {
-        select: {
-          name: true,
-        },
-      },
-    },
-  });
+  const products = await productRepository.findMany({});
   response.status(200).json(products);
 });
 
@@ -293,19 +264,17 @@ const createProduct = asyncHandler(async (request, response) => {
     throw new AppError("Missing required field: categoryId", 400);
   }
 
-  const product = await prisma.product.create({
-    data: {
-      merchantId,
-      slug,
-      title,
-      mainImage,
-      price,
-      rating: 5,
-      description,
-      manufacturer,
-      categoryId,
-      inStock,
-    },
+  const product = await productRepository.create({
+    merchantId,
+    slug,
+    title,
+    mainImage,
+    price,
+    rating: 5,
+    description,
+    manufacturer,
+    categoryId,
+    inStock,
   });
   return response.status(201).json(product);
 });
@@ -332,33 +301,24 @@ const updateProduct = asyncHandler(async (request, response) => {
   }
 
   // Finding a product by id
-  const existingProduct = await prisma.product.findUnique({
-    where: {
-      id,
-    },
-  });
+  const existingProduct = await productRepository.findById(id);
 
   if (!existingProduct) {
     throw new AppError("Product not found", 404);
   }
 
   // Updating found product
-  const updatedProduct = await prisma.product.update({
-    where: {
-      id,
-    },
-    data: {
-      merchantId: merchantId,
-      title: title,
-      mainImage: mainImage,
-      slug: slug,
-      price: price,
-      rating: rating,
-      description: description,
-      manufacturer: manufacturer,
-      categoryId: categoryId,
-      inStock: inStock,
-    },
+  const updatedProduct = await productRepository.update(id, {
+    merchantId: merchantId,
+    title: title,
+    mainImage: mainImage,
+    slug: slug,
+    price: price,
+    rating: rating,
+    description: description,
+    manufacturer: manufacturer,
+    categoryId: categoryId,
+    inStock: inStock,
   });
 
   return response.status(200).json(updatedProduct);
@@ -373,21 +333,13 @@ const deleteProduct = asyncHandler(async (request, response) => {
   }
 
   // Check for related records in order_product table
-  const relatedOrderProductItems = await prisma.customer_order_product.findMany({
-    where: {
-      productId: id,
-    },
-  });
+  const relatedOrderProductItems = await productRepository.findRelatedOrderItems(id);
   
   if(relatedOrderProductItems.length > 0){
     throw new AppError("Cannot delete product because of foreign key constraint", 400);
   }
 
-  await prisma.product.delete({
-    where: {
-      id,
-    },
-  });
+  await productRepository.delete(id);
   return response.status(204).send();
 });
 
@@ -398,22 +350,7 @@ const searchProducts = asyncHandler(async (request, response) => {
     throw new AppError("Query parameter is required", 400);
   }
 
-  const products = await prisma.product.findMany({
-    where: {
-      OR: [
-        {
-          title: {
-            contains: query,
-          },
-        },
-        {
-          description: {
-            contains: query,
-          },
-        },
-      ],
-    },
-  });
+  const products = await productRepository.search(query);
 
   return response.json(products);
 });
@@ -425,14 +362,7 @@ const getProductById = asyncHandler(async (request, response) => {
     throw new AppError("Product ID is required", 400);
   }
 
-  const product = await prisma.product.findUnique({
-    where: {
-      id: id,
-    },
-    include: {
-      category: true,
-    },
-  });
+  const product = await productRepository.findByIdWithCategory(id);
   
   if (!product) {
     throw new AppError("Product not found", 404);
