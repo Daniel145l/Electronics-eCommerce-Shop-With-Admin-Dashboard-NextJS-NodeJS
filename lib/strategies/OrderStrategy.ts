@@ -1,10 +1,33 @@
 import apiClient from "@/lib/api";
 import toast from "react-hot-toast";
 
+//tipos de dados
+export interface OrderData {
+  name: string;
+  lastname: string;
+  phone: string;
+  email: string;
+  company: string;
+  adress: string;
+  apartment: string;
+  postalCode: string;
+  status: string;
+  total: number;
+  city: string;
+  country: string;
+  orderNotice: string;
+  userId: string | null;
+}
+
+export interface OrderProductItem {
+  id: string;
+  amount: number;
+}
+
 //interface de dados
 export interface OrderPayload {
-  orderData: any;
-  products: any[];
+  orderData: OrderData;
+  products: OrderProductItem[];
   addOrderProductFn: (orderId: string, productId: string, quantity: number) => Promise<void>;
 }
 
@@ -28,7 +51,7 @@ export class RestApiOrderStrategy implements OrderCreationStrategy {
           toast.error(errorData.details || errorData.error || "Duplicate order detected");
           throw new Error("DUPLICATE_ORDER");
         } else if (errorData.details && Array.isArray(errorData.details)) {
-          errorData.details.forEach((detail: any) => {
+          errorData.details.forEach((detail: { field: string; message: string }) => {
             toast.error(`${detail.field}: ${detail.message}`);
           });
         } else if (typeof errorData.details === "string") {
