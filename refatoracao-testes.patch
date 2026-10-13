@@ -1,0 +1,374 @@
+diff --git a/__tests__/orderObserver.test.ts b/__tests__/orderObserver.test.ts
+new file mode 100644
+index 0000000..2bdb46d
+--- /dev/null
++++ b/__tests__/orderObserver.test.ts
+@@ -0,0 +1,85 @@
++/**
++ * @jest-environment jsdom
++ */
++import {
++  LoggerObserver,
++  OrderObserver,
++  OrderSubject,
++  WindowEventObserver,
++  orderSubject,
++} from "@/lib/observer/orderObserver";
++
++describe("OrderSubject", () => {
++  it("notifica todos os observadores inscritos", () => {
++    const subject = new OrderSubject();
++    const a: OrderObserver = { onOrderCompleted: jest.fn() };
++    const b: OrderObserver = { onOrderCompleted: jest.fn() };
++    subject.subscribe(a);
++    subject.subscribe(b);
++
++    subject.notifyAll("o1");
++
++    expect(a.onOrderCompleted).toHaveBeenCalledWith("o1");
++    expect(b.onOrderCompleted).toHaveBeenCalledWith("o1");
++  });
++
++  it("não notifica observadores que cancelaram a inscrição", () => {
++    const subject = new OrderSubject();
++    const a: OrderObserver = { onOrderCompleted: jest.fn() };
++    subject.subscribe(a);
++    subject.notifyAll("o1");
++    subject.unsubscribe(a);
++    subject.notifyAll("o2");
++
++    expect(a.onOrderCompleted).toHaveBeenCalledTimes(1);
++  });
++
++  it("a falha de um observador não impede os demais de serem notificados", () => {
++    jest.spyOn(console, "error").mockImplementation(() => undefined);
++    const subject = new OrderSubject();
++    const broken: OrderObserver = {
++      onOrderCompleted: jest.fn(() => {
++        throw new Error("boom");
++      }),
++    };
++    const healthy: OrderObserver = { onOrderCompleted: jest.fn() };
++    subject.subscribe(broken);
++    subject.subscribe(healthy);
++
++    expect(() => subject.notifyAll("o1")).not.toThrow();
++    expect(healthy.onOrderCompleted).toHaveBeenCalledWith("o1");
++  });
++});
++
++describe("WindowEventObserver", () => {
++  it("dispara o evento orderCompleted com o id do pedido", () => {
++    const listener = jest.fn();
++    window.addEventListener("orderCompleted", listener);
++
++    new WindowEventObserver().onOrderCompleted("o9");
++
++    expect(listener).toHaveBeenCalledTimes(1);
++    expect((listener.mock.calls[0][0] as CustomEvent).detail).toEqual({ orderId: "o9" });
++    window.removeEventListener("orderCompleted", listener);
++  });
++});
++
++describe("orderSubject (instância compartilhada)", () => {
++  it("já vem com o WindowEventObserver e o LoggerObserver registrados", () => {
++    jest.spyOn(console, "log").mockImplementation(() => undefined);
++    const listener = jest.fn();
++    window.addEventListener("orderCompleted", listener);
++
++    orderSubject.notifyAll("o5");
++
++    expect(listener).toHaveBeenCalledTimes(1);
++    expect(console.log).toHaveBeenCalledWith(expect.stringContaining("o5"));
++    window.removeEventListener("orderCompleted", listener);
++  });
++
++  it("LoggerObserver registra o pedido concluído", () => {
++    const spy = jest.spyOn(console, "log").mockImplementation(() => undefined);
++    new LoggerObserver().onOrderCompleted("o7");
++    expect(spy).toHaveBeenCalledWith("[audit] Order completed: o7");
++  });
++});
+diff --git a/__tests__/orderStrategy.test.ts b/__tests__/orderStrategy.test.ts
+new file mode 100644
+index 0000000..c913487
+--- /dev/null
++++ b/__tests__/orderStrategy.test.ts
+@@ -0,0 +1,146 @@
++import toast from "react-hot-toast";
++import apiClient from "@/lib/api";
++import {
++  OrderContext,
++  OrderCreationStrategy,
++  OrderData,
++  OrderPayload,
++  RestApiOrderStrategy,
++} from "@/lib/strategies/OrderStrategy";
++
++jest.mock("@/lib/api", () => ({
++  __esModule: true,
++  default: { post: jest.fn(), get: jest.fn() },
++}));
++
++jest.mock("react-hot-toast", () => ({
++  __esModule: true,
++  default: { error: jest.fn(), success: jest.fn() },
++}));
++
++const mockedPost = apiClient.post as jest.Mock;
++const mockedToastError = toast.error as unknown as jest.Mock;
++
++const orderData: OrderData = {
++  name: "Ana",
++  lastname: "Silva",
++  phone: "85999999999",
++  email: "ana@example.com",
++  company: "ACME",
++  adress: "Rua A, 10",
++  apartment: "101",
++  postalCode: "63900000",
++  status: "pending",
++  total: 300,
++  city: "Quixadá",
++  country: "Brasil",
++  orderNotice: "",
++  userId: null,
++};
++
++const makePayload = (addFn = jest.fn().mockResolvedValue(undefined)): OrderPayload => ({
++  orderData,
++  products: [
++    { id: "p1", amount: 1 },
++    { id: "p2", amount: 3 },
++  ],
++  addOrderProductFn: addFn,
++});
++
++beforeEach(() => {
++  jest.clearAllMocks();
++  jest.spyOn(console, "log").mockImplementation(() => undefined);
++});
++
++describe("RestApiOrderStrategy", () => {
++  it("cria o pedido e adiciona cada produto na ordem", async () => {
++    mockedPost.mockResolvedValue({ ok: true, json: async () => ({ id: "order-1" }) });
++    const addFn = jest.fn().mockResolvedValue(undefined);
++
++    const id = await new RestApiOrderStrategy().createOrder(makePayload(addFn));
++
++    expect(id).toBe("order-1");
++    expect(mockedPost).toHaveBeenCalledWith("/api/orders", orderData);
++    expect(addFn).toHaveBeenCalledTimes(2);
++    expect(addFn).toHaveBeenNthCalledWith(1, "order-1", "p1", 1);
++    expect(addFn).toHaveBeenNthCalledWith(2, "order-1", "p2", 3);
++  });
++
++  it("lança DUPLICATE_ORDER e mostra um toast em caso de 409", async () => {
++    mockedPost.mockResolvedValue({
++      ok: false,
++      status: 409,
++      text: async () => JSON.stringify({ error: "Duplicate order" }),
++    });
++    const addFn = jest.fn();
++
++    await expect(new RestApiOrderStrategy().createOrder(makePayload(addFn))).rejects.toThrow(
++      "DUPLICATE_ORDER"
++    );
++    expect(mockedToastError).toHaveBeenCalledTimes(1);
++    expect(addFn).not.toHaveBeenCalled();
++  });
++
++  it("mostra um toast por erro de validação e lança ORDER_CREATION_FAILED", async () => {
++    mockedPost.mockResolvedValue({
++      ok: false,
++      status: 400,
++      text: async () =>
++        JSON.stringify({
++          details: [
++            { field: "email", message: "invalid" },
++            { field: "phone", message: "required" },
++          ],
++        }),
++    });
++
++    await expect(new RestApiOrderStrategy().createOrder(makePayload())).rejects.toThrow(
++      "ORDER_CREATION_FAILED"
++    );
++    expect(mockedToastError).toHaveBeenCalledTimes(2);
++    expect(mockedToastError).toHaveBeenCalledWith("email: invalid");
++  });
++
++  it("trata resposta de erro que não é JSON", async () => {
++    mockedPost.mockResolvedValue({ ok: false, status: 500, text: async () => "<html>erro</html>" });
++
++    await expect(new RestApiOrderStrategy().createOrder(makePayload())).rejects.toThrow(
++      "ORDER_CREATION_FAILED"
++    );
++    expect(mockedToastError).toHaveBeenCalledWith("Order creation failed. Please try again.");
++  });
++
++  it("falha quando o servidor não devolve o id do pedido", async () => {
++    mockedPost.mockResolvedValue({ ok: true, json: async () => ({}) });
++    const addFn = jest.fn();
++
++    await expect(new RestApiOrderStrategy().createOrder(makePayload(addFn))).rejects.toThrow(
++      "Order ID not received from server"
++    );
++    expect(addFn).not.toHaveBeenCalled();
++  });
++});
++
++describe("OrderContext", () => {
++  it("delega a criação para a estratégia atual", async () => {
++    const strategy: OrderCreationStrategy = { createOrder: jest.fn().mockResolvedValue("x1") };
++    const payload = makePayload();
++
++    const id = await new OrderContext(strategy).executeOrderCreation(payload);
++
++    expect(id).toBe("x1");
++    expect(strategy.createOrder).toHaveBeenCalledWith(payload);
++  });
++
++  it("permite trocar a estratégia em tempo de execução (mock checkout)", async () => {
++    const first: OrderCreationStrategy = { createOrder: jest.fn().mockResolvedValue("a") };
++    const second: OrderCreationStrategy = { createOrder: jest.fn().mockResolvedValue("b") };
++    const ctx = new OrderContext(first);
++
++    ctx.setStrategy(second);
++    const id = await ctx.executeOrderCreation(makePayload());
++
++    expect(id).toBe("b");
++    expect(first.createOrder).not.toHaveBeenCalled();
++  });
++});
+diff --git a/jest.config.js b/jest.config.js
+new file mode 100644
+index 0000000..9102c0f
+--- /dev/null
++++ b/jest.config.js
+@@ -0,0 +1,14 @@
++const nextJest = require("next/jest");
++
++const createJestConfig = nextJest({ dir: "./" });
++
++/** @type {import('jest').Config} */
++const customJestConfig = {
++  testEnvironment: "node",
++  testMatch: ["<rootDir>/__tests__/**/*.test.ts"],
++  moduleNameMapper: {
++    "^@/(.*)$": "<rootDir>/$1",
++  },
++};
++
++module.exports = createJestConfig(customJestConfig);
+diff --git a/lib/observer/orderObserver.ts b/lib/observer/orderObserver.ts
+index 1f48b83..0373b5e 100644
+--- a/lib/observer/orderObserver.ts
++++ b/lib/observer/orderObserver.ts
+@@ -14,6 +14,13 @@ export class WindowEventObserver implements OrderObserver {
+   }
+ }
+ 
++//observador concreto 2: registro de auditoria/log
++export class LoggerObserver implements OrderObserver {
++  onOrderCompleted(orderId: string): void {
++    console.log(`[audit] Order completed: ${orderId}`);
++  }
++}
++
+ //sujeito
+ export class OrderSubject {
+   private observers: OrderObserver[] = [];
+@@ -27,9 +34,17 @@ export class OrderSubject {
+   }
+ 
+   public notifyAll(orderId: string): void {
+-    this.observers.forEach((observer) => observer.onOrderCompleted(orderId));
++    this.observers.forEach((observer) => {
++      try {
++        observer.onOrderCompleted(orderId);
++      } catch (error) {
++        // a falha de um observador não impede a notificação dos demais
++        console.error("Observer failed while handling orderCompleted:", error);
++      }
++    });
+   }
+ }
+ 
+ export const orderSubject = new OrderSubject();
+-orderSubject.subscribe(new WindowEventObserver());
+\ No newline at end of file
++orderSubject.subscribe(new WindowEventObserver());
++orderSubject.subscribe(new LoggerObserver());
+\ No newline at end of file
+diff --git a/lib/strategies/OrderStrategy.ts b/lib/strategies/OrderStrategy.ts
+index 44c1eb4..9db6f65 100644
+--- a/lib/strategies/OrderStrategy.ts
++++ b/lib/strategies/OrderStrategy.ts
+@@ -1,10 +1,33 @@
+ import apiClient from "@/lib/api";
+ import toast from "react-hot-toast";
+ 
++//tipos de dados
++export interface OrderData {
++  name: string;
++  lastname: string;
++  phone: string;
++  email: string;
++  company: string;
++  adress: string;
++  apartment: string;
++  postalCode: string;
++  status: string;
++  total: number;
++  city: string;
++  country: string;
++  orderNotice: string;
++  userId: string | null;
++}
++
++export interface OrderProductItem {
++  id: string;
++  amount: number;
++}
++
+ //interface de dados
+ export interface OrderPayload {
+-  orderData: any;
+-  products: any[];
++  orderData: OrderData;
++  products: OrderProductItem[];
+   addOrderProductFn: (orderId: string, productId: string, quantity: number) => Promise<void>;
+ }
+ 
+@@ -28,7 +51,7 @@ export class RestApiOrderStrategy implements OrderCreationStrategy {
+           toast.error(errorData.details || errorData.error || "Duplicate order detected");
+           throw new Error("DUPLICATE_ORDER");
+         } else if (errorData.details && Array.isArray(errorData.details)) {
+-          errorData.details.forEach((detail: any) => {
++          errorData.details.forEach((detail: { field: string; message: string }) => {
+             toast.error(`${detail.field}: ${detail.message}`);
+           });
+         } else if (typeof errorData.details === "string") {
+diff --git a/package.json b/package.json
+index 339eb77..12170ed 100644
+--- a/package.json
++++ b/package.json
+@@ -7,6 +7,7 @@
+     "build": "prisma generate && next build",   
+     "start": "next start",
+     "lint": "next lint",
++    "test": "jest",
+     "db:generate": "prisma generate",
+     "db:push": "prisma db push",
+     "db:studio": "prisma studio"
+@@ -40,6 +41,9 @@
+   },
+   "devDependencies": {
+     "@types/dompurify": "^3.0.5",
++    "@types/jest": "^29.5.12",
++    "jest": "^29.7.0",
++    "jest-environment-jsdom": "^29.7.0",
+     "@types/node": "^24.3.3",
+     "@types/react": "^18.3.24",
+     "@types/react-dom": "^18.3.7",
