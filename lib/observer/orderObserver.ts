@@ -14,6 +14,13 @@ export class WindowEventObserver implements OrderObserver {
   }
 }
 
+//observador concreto 2: registro de auditoria/log
+export class LoggerObserver implements OrderObserver {
+  onOrderCompleted(orderId: string): void {
+    console.log(`[audit] Order completed: ${orderId}`);
+  }
+}
+
 //sujeito
 export class OrderSubject {
   private observers: OrderObserver[] = [];
@@ -27,9 +34,17 @@ export class OrderSubject {
   }
 
   public notifyAll(orderId: string): void {
-    this.observers.forEach((observer) => observer.onOrderCompleted(orderId));
+    this.observers.forEach((observer) => {
+      try {
+        observer.onOrderCompleted(orderId);
+      } catch (error) {
+        // a falha de um observador não impede a notificação dos demais
+        console.error("Observer failed while handling orderCompleted:", error);
+      }
+    });
   }
 }
 
 export const orderSubject = new OrderSubject();
 orderSubject.subscribe(new WindowEventObserver());
+orderSubject.subscribe(new LoggerObserver());
